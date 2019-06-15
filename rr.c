@@ -10,7 +10,6 @@
 #include <string.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <Judy.h>
 
 #include "common.h"
 #include "mempool.h"
@@ -36,7 +35,7 @@ static char* rdtype2str_map[T_MAX+1] = {
     "HINFO",
     "MINFO",
     "MX",  /* 15 */
-    "TXT", 
+    "TXT",
     "RP",
     "AFSDB",
     "X25",
@@ -224,8 +223,6 @@ static struct rr_set *find_or_create_rr_set(struct named_rr *named_rr, int rdtyp
 {
     struct rr_set *rr_set = find_rr_set_in_named_rr(named_rr, rdtype);
     if (!rr_set) {
-        struct rr_set **rr_set_slot;
-
         rr_set = getmem(sizeof(struct rr_set));
         rr_set->head = NULL;
         rr_set->tail = NULL;
@@ -233,13 +230,8 @@ static struct rr_set *find_or_create_rr_set(struct named_rr *named_rr, int rdtyp
         rr_set->rdtype = rdtype;
         rr_set->count = 0;
 
-        JLI(rr_set_slot, named_rr->rr_sets, rdtype);
-        if (rr_set_slot == PJERR)
-            croak(2, "find_or_create_rr_set: JLI failed");
-        if (*rr_set_slot)
-            croak(3, "find_or_create_rr_set: assertion error, %s/%s should not be there",
-                  named_rr->name, rdtype2str(rdtype));
-        *rr_set_slot = rr_set;
+        HASH_ADD_INT(named_rr->rr_sets, rdtype, rr_set);
+
         G.stats.rrset_count++;
     }
     return rr_set;
@@ -423,19 +415,17 @@ struct rr_set *find_rr_set(int rdtype, char *name)
 
 struct rr_set *find_rr_set_in_named_rr(struct named_rr *named_rr, int rdtype)
 {
-    struct rr_set **rr_set_slot;
+    struct rr_set *rr_set_slot;
 
-    JLG(rr_set_slot, named_rr->rr_sets, rdtype);
+    HASH_FIND_INT(named_rr->rr_sets, &rdtype, rr_set_slot);
     if (rr_set_slot)
-        return *rr_set_slot;
+        return rr_set_slot;
     return NULL;
 }
 
 uint32_t get_rr_set_count(struct named_rr *named_rr)
 {
-    uint32_t count;
-    JLC(count, named_rr->rr_sets, 0, -1);
-    return count;
+    return HASH_COUNT(named_rr->rr_sets);
 }
 
 struct rr *rr_parse_any(char *name, long ttl, int type, char *s)
@@ -692,8 +682,7 @@ static int
 validate_named_rr(const char *name, intptr_t *data, void *p)
 {
     struct named_rr *named_rr = *((struct named_rr **)data);
-    Word_t rdtype;
-    struct rr_set **rr_set_p;
+    struct rr_set *rr_set_p;
     int nsec3_present = 0;
     int nsec3_only = 1;
     static int seen_apex = 0;
@@ -711,17 +700,16 @@ validate_named_rr(const char *name, intptr_t *data, void *p)
     }
 
     if (G.nsec3_opt_out_present && (named_rr->flags & NAME_FLAG_DELEGATION)) {
-        JLG(rr_set_p, named_rr->rr_sets, T_DS);
+        int t_ds = T_DS;
+        HASH_FIND_INT(named_rr->rr_sets, &t_ds, rr_set_p);
         if (!rr_set_p)
             named_rr->flags |= NAME_FLAG_NOT_AUTHORITATIVE;
     }
 //debug(named_rr, ">>>>");
 
-    rdtype = 0;
-    JLF(rr_set_p, named_rr->rr_sets, rdtype);
-
-    while (rr_set_p) {
-        validate_rrset(*rr_set_p);
+    for(rr_set_p = named_rr->rr_sets; rr_set_p != NULL; rr_set_p = rr_set_p->hh.next) {
+        int rdtype = rr_set_p->rdtype;
+        validate_rrset(rr_set_p);
         if (rdtype == T_NSEC3)
             nsec3_present = 1;
         else if (rdtype != T_RRSIG)
@@ -753,7 +741,6 @@ validate_named_rr(const char *name, intptr_t *data, void *p)
                 nrr = nrr->parent;
             }
         }
-        JLN(rr_set_p, named_rr->rr_sets, rdtype);
     }
     if (nsec3_present && nsec3_only) {
         named_rr->flags |= NAME_FLAG_NSEC3_ONLY;
@@ -808,12 +795,14 @@ static int
 second_pass_one_name(const char *name, intptr_t *data, void *p)
 {
     struct named_rr *named_rr = *((struct named_rr **)data);
-    struct rr_set **rr_set_p;
+    struct rr_set *rr_set_p;
 
     freeall_temp();
-    JLG(rr_set_p, named_rr->rr_sets, T_NSEC);
-    if (rr_set_p && (*rr_set_p)->tail) {
-        nsec_validate_pass2((*rr_set_p)->tail);
+
+    int t_nsec = T_NSEC;
+    HASH_FIND_INT(named_rr->rr_sets, &t_nsec, rr_set_p);
+    if (rr_set_p && (rr_set_p)->tail) {
+        nsec_validate_pass2((rr_set_p)->tail);
     }
     return 1;
 }

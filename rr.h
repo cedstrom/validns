@@ -9,6 +9,8 @@
 #ifndef _RR_H
 #define _RR_H 1
 
+#include "libut/uthash.h"
+
 #define T_A     1
 #define T_NS    2
 #define T_CNAME 5
@@ -138,7 +140,7 @@ int extract_algorithm(char **s, char *what);
 struct named_rr
 {
     char *name;
-    void *rr_sets;
+    struct rr_set *rr_sets;
 
     int line;
     char *file_name;
@@ -153,6 +155,7 @@ struct rr_set
     struct named_rr *named_rr;
     int rdtype;
     int count;
+    UT_hash_handle hh;
 };
 
 struct rr
@@ -313,6 +316,7 @@ struct rr_nsec3
     struct binary_data this_hashed_name;
     struct named_rr *corresponding_name;
     struct rr_nsec3 *next_nsec3;
+    UT_hash_handle hh;
 };
 extern struct rr_methods nsec3_methods;
 

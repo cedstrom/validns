@@ -44,7 +44,7 @@ validns: main.o carp.o mempool.o textparse.o base64.o base32hex.o \
 	    afsdb.o x25.o isdn.o rt.o px.o kx.o \
 	    dlv.o dhcid.o nsap.o caa.o \
 	    -L/usr/local/lib -L/opt/local/lib $(EXTRALPATH) \
-	    -lJudy -lcrypto $(EXTRALIBS) $(EXTRALINKING)
+	    -lcrypto $(EXTRALIBS) $(EXTRALINKING)
 
 clean:
 	-rm -f validns main.o carp.o mempool.o textparse.o

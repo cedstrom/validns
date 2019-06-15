@@ -14,7 +14,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <openssl/evp.h>
-#include <Judy.h>
+
+#include "libut/utarray.h"
 
 #include "common.h"
 #include "textparse.h"
@@ -71,14 +72,13 @@ static struct binary_data name2hash(char *name, struct rr *param)
 int sorted_hashed_names_count;
 uint32_t mask;
 struct binary_data *sorted_hashed_names;
-void *nsec3_hash;
+struct rr_nsec3 *nsec3_hash = NULL;
 
 static int
 validate_nsec3_for_name(const char *name, intptr_t *data, void *p)
 {
     struct named_rr *named_rr = *((struct named_rr **)data);
     struct binary_data hash;
-    struct rr_nsec3 **nsec3_slot;
     struct rr_nsec3 *nsec3;
 
     if ((named_rr->flags & mask) == NAME_FLAG_KIDS_WITH_RECORDS) {
@@ -92,18 +92,18 @@ needs_nsec3:
         }
         if (hash.length != 20)
             croak(4, "assertion failed: wrong hashed name size %d", hash.length);
-        JHSG(nsec3_slot, nsec3_hash, hash.data, hash.length);
+
+        HASH_FIND(hh, nsec3_hash, hash.data, hash.length, nsec3);
+/*
         if (nsec3_slot == PJERR)
             croak(5, "perform_remaining_nsec3checks: JHSG failed");
-        if (!nsec3_slot) {
+*/
+        if (!nsec3) {
             moan(named_rr->file_name, named_rr->line,
                  "no corresponding NSEC3 found for %s",
                  named_rr->name);
             goto next;
         }
-        nsec3 = *nsec3_slot;
-        if (!nsec3)
-            croak(6, "assertion failed: existing nsec3 from hash is empty");
         nsec3->corresponding_name = named_rr;
         sorted_hashed_names_count++;
         check_typemap(nsec3->type_bitmap, named_rr, &nsec3->rr);
@@ -161,7 +161,6 @@ void *remember_nsec3(char *name, struct rr_nsec3 *rr)
     char hashed_name[33];
     char binary_hashed_name[20];
     int l;
-    struct rr_nsec3 **nsec3_slot;
 
     l = strlen(name);
     if (l < 33 || name[32] != '.')
@@ -175,15 +174,16 @@ void *remember_nsec3(char *name, struct rr_nsec3 *rr)
     l = decode_base32hex(binary_hashed_name, hashed_name, 20);
     if (l != 20)
         return bitch("NSEC3 record name is not valid");
-    JHSI(nsec3_slot, nsec3_hash, binary_hashed_name, 20);
-    if (nsec3_slot == PJERR)
-        croak(2, "remember_nsec3: JHSI failed");
-    if (*nsec3_slot)
+
+    struct rr_nsec3* tmp;
+    HASH_FIND(hh, nsec3_hash, binary_hashed_name, 20, tmp);
+    if (tmp)
         return bitch("multiple NSEC3 with the same record name");
-    *nsec3_slot = rr;
+
     rr->this_hashed_name.length = 20;
     rr->this_hashed_name.data = getmem(20);
     memcpy(rr->this_hashed_name.data, binary_hashed_name, 20);
+    HASH_ADD_KEYPTR(hh, nsec3_hash, rr->this_hashed_name.data, 20, rr);
     return rr;
 }
 
@@ -216,11 +216,12 @@ void *check_typemap(struct binary_data type_bitmap, struct named_rr *named_rr, s
     }
     real_distinct_types = get_rr_set_count(named_rr);
     if (real_distinct_types > nsec_distinct_types) {
-        void *bitmap = NULL;
-        struct rr_set **rr_set_slot;
+        UT_array *bitmap = NULL;
+        utarray_new(bitmap,&ut_int_icd);
+        utarray_resize(bitmap, T_MAX);
+
         int rc;
-        Word_t rcw;
-        Word_t rdtype;
+        uint32_t rdtype;
         int skipped = 0;
 
         base = type_bitmap.data;
@@ -229,35 +230,38 @@ void *check_typemap(struct binary_data type_bitmap, struct named_rr *named_rr, s
                 for (k = 0; k <= 7; k++) {
                     if (base[2+i] & (0x80 >> k)) {
                         type = ((unsigned char)base[0])*256 + i*8 + k;
-                        J1S(rc, bitmap, type);
+                        int one = 1;
+                        utarray_insert(bitmap, &one, type);
                     }
                 }
             }
             base += base[1]+2;
         }
+
         rdtype = 0;
-        JLF(rr_set_slot, named_rr->rr_sets, rdtype);
-        while (rr_set_slot) {
-            J1T(rc, bitmap, (*rr_set_slot)->rdtype);
+        struct rr_set *rr_set_p;
+
+        for(rr_set_p = named_rr->rr_sets; rr_set_p != NULL; rr_set_p = rr_set_p->hh.next) {
+            rc = *(utarray_eltptr(bitmap, rr_set_p->rdtype));
+
             if (!rc) {
                 if ((named_rr->flags & NAME_FLAG_DELEGATION) &&
-                    ((*rr_set_slot)->rdtype == T_A ||
-                    (*rr_set_slot)->rdtype == T_AAAA))
+                    (rr_set_p->rdtype == T_A ||
+                    rr_set_p->rdtype == T_AAAA))
                 {
                     skipped++;
                 } else {
                     moan(reference_rr->file_name, reference_rr->line,
                          "%s exists, but %s does not mention it for %s",
-                         rdtype2str((*rr_set_slot)->rdtype),
+                         rdtype2str(rr_set_p->rdtype),
                          rdtype2str(reference_rr->rdtype),
                          named_rr->name);
-                    J1FA(rcw, bitmap);
+                    utarray_free(bitmap);
                     return NULL;
                 }
             }
-            JLN(rr_set_slot, named_rr->rr_sets, rdtype);
         }
-        J1FA(rcw, bitmap);
+        utarray_free(bitmap);
         if (real_distinct_types - skipped > nsec_distinct_types) {
             return moan(reference_rr->file_name, reference_rr->line,
                         "internal: we know %s typemap is wrong, but don't know any details",
