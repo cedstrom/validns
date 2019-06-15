@@ -1,7 +1,7 @@
 # The following options seem to work fine on Linux, FreeBSD, and Darwin
 OPTIMIZE=-O2 -g
 CFLAGS=-Wall -Werror -pthread -fno-strict-aliasing
-INCPATH=-I/usr/local/include -I/opt/local/include -I/usr/local/ssl/include
+INCPATH=-I/usr/local/include -I/opt/local/include -I/usr/local/ssl/include -I/usr/local/opt/openssl/include
 CC?=cc
 
 # These additional options work on Solaris/gcc to which I have an access
@@ -17,6 +17,10 @@ CC?=cc
 #EXTRALPATH=-L/opt/sws/lib/64 -R/opt/sws/lib/64
 #EXTRALIBS-lrt -lnsl
 #EXTRALINKING=-mt -lpthread
+
+# brewed openssl
+EXTRALPATH=-L/usr/local/opt/openssl/lib -Wl
+#,-R,/usr/local/opt/openssl/lib
 
 validns: main.o carp.o mempool.o textparse.o base64.o base32hex.o \
 	rr.o soa.o a.o cname.o mx.o ns.o \
@@ -216,16 +220,21 @@ cbtree.o: cbtree.c cbtree.h
 threads.o: threads.c
 	$(CC) $(CFLAGS) $(OPTIMIZE) -c -o threads.o threads.c $(INCPATH)
 
+test: OPTIMIZE = -DHASH_DEBUG=1 -O0 -ggdb
 test: validns
 	perl -MTest::Harness -e 'runtests("t/test.pl")'
 
+test-details: OPTIMIZE = -DHASH_DEBUG=1 -O0 -ggdb
 test-details: validns
 	perl t/test.pl
 
 test64:
-	$(CC) -Wall -O2 -o base64-test base64.c -DTEST_PROGRAM
+	$(CC) -Wall -O0 -ggdb -o base64-test base64.c -DTEST_PROGRAM -DHASH_DEBUG=1
 	./base64-test
 
 test32hex:
-	$(CC) -Wall -O2 -o base32hex-test base32hex.c -DTEST_PROGRAM
+	$(CC) -Wall -O0 -ggdb -o base32hex-test base32hex.c -DTEST_PROGRAM -DHASH_DEBUG=1
 	./base32hex-test
+
+debug: OPTIMIZE := -DHASH_DEBUG=1 -O0 -ggdb
+debug: validns
